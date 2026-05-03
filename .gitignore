@@ -1,0 +1,14 @@
+__pycache__/
+build/
+dist/
+*.spec
+*.pyc
+*.pyo
+*.log
+*.zip
+*.db
+settings.json
+reset_root_password.sql
+stock_fee_calculator.py
+.venv/
+venv/
