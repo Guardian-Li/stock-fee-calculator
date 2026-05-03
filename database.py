@@ -108,6 +108,42 @@ def delete_position(stock_code):
         conn.commit()
 
 
+def merge_unapplied_trades_to_position(stock_code):
+    ensure_trade_table()
+    ensure_position_table()
+    with get_connection() as conn:
+        position = conn.execute(
+            f"SELECT stock_code FROM {POSITION_TABLE} WHERE stock_code = ?",
+            (stock_code,),
+        ).fetchone()
+        if not position:
+            raise ValueError("请先设置该股票的持仓")
+
+        rows = conn.execute(
+            f"""
+            SELECT id, net_profit
+            FROM {TRADE_TABLE}
+            WHERE stock_code = ? AND position_applied = '0'
+            ORDER BY id
+            """,
+            (stock_code,),
+        ).fetchall()
+        if not rows:
+            return 0, Decimal("0")
+
+        total_profit = sum((Decimal(str(row["net_profit"] or "0")) for row in rows), Decimal("0"))
+        applied = apply_profit_to_position(conn, stock_code, total_profit)
+        if applied:
+            ids = [row["id"] for row in rows]
+            placeholders = ",".join("?" for _ in ids)
+            conn.execute(
+                f"UPDATE {TRADE_TABLE} SET position_applied = '1' WHERE id IN ({placeholders})",
+                ids,
+            )
+        conn.commit()
+        return len(rows), money(total_profit)
+
+
 def apply_profit_to_position(conn, stock_code, net_profit):
     row = conn.execute(
         f"SELECT accumulated_net_profit FROM {POSITION_TABLE} WHERE stock_code = ?",

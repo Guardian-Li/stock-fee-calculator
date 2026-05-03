@@ -3,7 +3,7 @@ from decimal import Decimal
 from tkinter import messagebox, ttk
 
 from calculations import money, parse_decimal
-from database import delete_position, load_positions, save_position
+from database import delete_position, load_positions, merge_unapplied_trades_to_position, save_position
 
 
 class PositionsPage(ttk.Frame):
@@ -33,6 +33,12 @@ class PositionsPage(ttk.Frame):
             entry.insert(0, default)
             entry.grid(row=row, column=col + 1, sticky=tk.EW, padx=(0, 18), pady=6)
             self.position_entries[key] = entry
+            if key == "stock_code":
+                entry.bind("<KeyRelease>", self.on_stock_code_key)
+                entry.bind("<FocusOut>", self.fill_by_code_if_exact)
+            elif key == "stock_name":
+                entry.bind("<KeyRelease>", self.on_stock_name_key)
+                entry.bind("<FocusOut>", self.fill_by_name_if_exact)
 
         form.columnconfigure(1, weight=1)
         form.columnconfigure(3, weight=1)
@@ -42,6 +48,7 @@ class PositionsPage(ttk.Frame):
         ttk.Button(actions, text="使用当前股票", command=self.fill_from_current_stock).pack(side=tk.LEFT)
         ttk.Button(actions, text="保存/重设持仓", command=self.save_position).pack(side=tk.LEFT, padx=8)
         ttk.Button(actions, text="删除选中持仓", command=self.delete_selected_position).pack(side=tk.LEFT)
+        ttk.Button(actions, text="合并历史T收益", command=self.merge_selected_position_trades).pack(side=tk.LEFT, padx=8)
         ttk.Button(actions, text="刷新持仓", command=self.refresh).pack(side=tk.LEFT, padx=8)
         ttk.Label(actions, textvariable=self.summary_var, font=("Microsoft YaHei UI", 10, "bold")).pack(side=tk.RIGHT)
 
@@ -86,6 +93,40 @@ class PositionsPage(ttk.Frame):
         table_frame.rowconfigure(0, weight=1)
         table_frame.columnconfigure(0, weight=1)
         self.refresh()
+
+    def on_stock_code_key(self, _event=None):
+        code = self.position_entries["stock_code"].get().strip()
+        if not code:
+            return
+        matches = [row for row in self.app.stock_rows if row["stock_code"].startswith(code)]
+        if matches:
+            self.fill_stock(matches[0], keep_code_text=True)
+
+    def on_stock_name_key(self, _event=None):
+        name = self.position_entries["stock_name"].get().strip().lower()
+        if not name:
+            return
+        matches = [row for row in self.app.stock_rows if name in row["stock_name"].lower()]
+        if matches:
+            self.fill_stock(matches[0], keep_name_text=True)
+
+    def fill_by_code_if_exact(self, _event=None):
+        code = self.position_entries["stock_code"].get().strip()
+        if code in self.app.stock_by_code:
+            self.fill_stock(self.app.stock_by_code[code])
+
+    def fill_by_name_if_exact(self, _event=None):
+        name = self.position_entries["stock_name"].get().strip()
+        if name in self.app.stock_by_name:
+            self.fill_stock(self.app.stock_by_name[name])
+
+    def fill_stock(self, row, keep_code_text=False, keep_name_text=False):
+        if not keep_code_text:
+            self.position_entries["stock_code"].delete(0, tk.END)
+            self.position_entries["stock_code"].insert(0, row["stock_code"])
+        if not keep_name_text:
+            self.position_entries["stock_name"].delete(0, tk.END)
+            self.position_entries["stock_name"].insert(0, row["stock_name"])
 
     def fill_from_current_stock(self):
         code = self.app.code_var.get().strip()
@@ -140,6 +181,32 @@ class PositionsPage(ttk.Frame):
             messagebox.showerror("删除失败", str(exc))
             return
         self.refresh()
+
+    def merge_selected_position_trades(self):
+        if self.positions_tree is None:
+            return
+        selection = self.positions_tree.selection()
+        if not selection:
+            messagebox.showinfo("请选择持仓", "请先选中一条持仓记录。")
+            return
+
+        values = self.positions_tree.item(selection[0], "values")
+        stock_text = values[0]
+        stock_code = stock_text.split(" ", 1)[0]
+        if not messagebox.askyesno("确认合并", f"把 {stock_text} 之前未摊入的做T记录净收益合并到当前持仓成本里吗？"):
+            return
+
+        try:
+            count, total_profit = merge_unapplied_trades_to_position(stock_code)
+        except Exception as exc:
+            messagebox.showerror("合并失败", str(exc))
+            return
+
+        if count == 0:
+            messagebox.showinfo("没有可合并记录", "没有找到该股票尚未摊入持仓的交易记录。")
+        else:
+            messagebox.showinfo("合并成功", f"已合并 {count} 条记录，合计净收益 {total_profit} 元。")
+        self.app.refresh_records_and_positions()
 
     def refresh(self):
         if self.positions_tree is None:
